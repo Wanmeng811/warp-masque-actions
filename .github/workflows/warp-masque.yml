@@ -11,9 +11,11 @@ on:
         description: artifact 保留天数
         required: false
         default: '7'
+  schedule:
+    - cron: '0 0 * * *'   # 每天 UTC 0 点（北京时间 8 点）自动跑
 
 permissions:
-  contents: read
+  contents: write          # 需要写权限来回推 .last-run
 
 jobs:
   generate:
@@ -31,7 +33,6 @@ jobs:
             "https://github.com/Diniboy1123/usque/releases/download/v${VER}/usque_${VER}_linux_amd64.zip"
           unzip -oq usque.zip
           chmod +x usque
-          # 没有 config.json 时 usque version 会先打一条 error，不影响结果
           ./usque version 2>/dev/null | grep -i version || true
 
       - name: 注册设备并生成密钥
@@ -39,7 +40,6 @@ jobs:
           set -euo pipefail
           ./usque register -a -n "${{ github.event.inputs.device_name || 'gh-actions' }}"
           test -s config.json
-          # 只打印非敏感字段，密钥不进日志
           python3 - <<'PY'
           import json
           c = json.load(open("config.json"))
@@ -61,7 +61,6 @@ jobs:
           chmod +x mihomo
           mkdir -p check
           cp dist/warp-masque.yaml check/config.yaml
-          # -t 只做配置解析校验，不起服务
           ./mihomo -t -d check
           echo "配置校验通过"
 
@@ -79,3 +78,26 @@ jobs:
           path: dist/
           retention-days: ${{ github.event.inputs.retention_days || 7 }}
           if-no-files-found: error
+
+      - name: 更新 Gist
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: |
+          set -euo pipefail
+          GIST_ID="29c18b19c159d9f54a9a82f60618c8b5"
+          CONTENT=$(jq -Rs . < dist/warp-masque.yaml)
+          curl -sL -X PATCH \
+            -H "Authorization: token $GIST_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/gists/$GIST_ID" \
+            -d "{\"files\":{\"config.yaml\":{\"content\":$CONTENT}}}"
+          echo "Gist 已更新"
+
+      - name: 保持仓库活跃
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .last-run
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add .last-run
+          git commit -m "chore: keep alive" || true
+          git push || true
